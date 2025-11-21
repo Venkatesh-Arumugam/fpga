@@ -28,7 +28,7 @@ build_dir:
 # Build HLS kernel → XO
 ############################################
 xo: build_dir
-	v++ -c -t hw \
+	v++ -c -t hw_emu \
 	    --platform $(PLATFORM) \
 	    -k $(KERNEL_NAME) \
 	    -o $(XO_FILE) \
@@ -38,7 +38,7 @@ xo: build_dir
 # Link → XCLBIN
 ############################################
 xclbin: xo
-	v++ -l -t hw \
+	v++ -l -t hw_emu \
 	    --platform $(PLATFORM) \
 	    $(XO_FILE) \
 	    -o $(XCLBIN_FILE)
