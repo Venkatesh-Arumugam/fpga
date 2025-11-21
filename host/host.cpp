@@ -88,7 +88,7 @@ int main(int argc, char** argv)
     auto kernel = xrt::kernel(device, uuid, "dct");
     // Kernel name must match the top function in HLS: "dct"
     std::cout << "Opening kernel 'dct'...\n";
-    auto kernel = xrt::kernel(device, xclbin, "dct");
+    
 
     // ------------------------------------------------------------------
     // Allocate device buffers (M_AXI bindings depend on your HLS pragmas)
@@ -176,4 +176,5 @@ int main(int argc, char** argv)
     std::cout << "Wrote output image: " << output_png << "\n";
     return 0;
 }
+
 
