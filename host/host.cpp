@@ -1,152 +1,129 @@
-#include <ap_int.h>
-#include <ap_fixed.h>
-#include <hls_math.h>
+#include <iostream>
+#include <vector>
+#include <stdexcept>
 
-// Pixel type (8-bit) and internal fixed-point type
-typedef ap_uint<8>    pixel_t;
-typedef ap_fixed<18,4> dct_t;
+#include <opencv2/opencv.hpp>
+#include <xrt/xrt_device.h>
+#include <xrt/xrt_kernel.h>
+#include <xrt/xrt_bo.h>
 
-// DCT block size
-static const int N = 8;
+using pixel_t = unsigned char;
 
-// Precomputed 8×8 DCT matrix
-static const dct_t C[N][N] = {
-    { 0.353553f,  0.353553f,  0.353553f,  0.353553f,  0.353553f,  0.353553f,  0.353553f,  0.353553f },
-    { 0.490393f,  0.415735f,  0.277785f,  0.097545f, -0.097545f, -0.277785f, -0.415735f,-0.490393f },
-    { 0.461940f,  0.191342f, -0.191342f, -0.461940f, -0.461940f, -0.191342f,  0.191342f, 0.461940f },
-    { 0.415735f, -0.097545f, -0.490393f, -0.277785f,  0.277785f,  0.490393f,  0.097545f,-0.415735f },
-    { 0.353553f, -0.353553f, -0.353553f,  0.353553f,  0.353553f, -0.353553f, -0.353553f, 0.353553f },
-    { 0.277785f, -0.490393f,  0.097545f,  0.415735f, -0.415735f, -0.097545f,  0.490393f,-0.277785f },
-    { 0.191342f, -0.461940f,  0.461940f, -0.191342f, -0.191342f,  0.461940f, -0.461940f, 0.191342f },
-    { 0.097545f, -0.277785f,  0.415735f, -0.490393f,  0.490393f, -0.415735f,  0.277785f,-0.097545f }
-};
-
-// -------------------------------------------------------------
-// 2D DCT on an 8×8 block (one channel)
-// -------------------------------------------------------------
-static void dct_block(pixel_t in_blk[N][N], pixel_t out_blk[N][N]) {
-#pragma HLS INLINE
-
-    dct_t tmp[N][N];
-#pragma HLS ARRAY_PARTITION variable=tmp complete dim=0
-
-    // Row transform
-    for (int u = 0; u < N; u++) {
-#pragma HLS UNROLL
-        for (int v = 0; v < N; v++) {
-#pragma HLS UNROLL
-            dct_t acc = 0;
-            for (int x = 0; x < N; x++) {
-#pragma HLS UNROLL
-                acc += C[u][x] * (dct_t)((int)in_blk[x][v] - 128);
-            }
-            tmp[u][v] = acc;
-        }
+int main(int argc, char** argv)
+{
+    if (argc != 4) {
+        std::cerr << "Usage: " << argv[0]
+                  << " <xclbin> <input.png> <output.png>\n";
+        return 1;
     }
 
-    // Column transform
-    for (int u = 0; u < N; u++) {
-#pragma HLS UNROLL
-        for (int v = 0; v < N; v++) {
-#pragma HLS UNROLL
-            dct_t acc = 0;
-            for (int y = 0; y < N; y++) {
-#pragma HLS UNROLL
-                acc += tmp[u][y] * C[v][y];
-            }
+    std::string xclbin_file = argv[1];
+    std::string input_file  = argv[2];
+    std::string output_file = argv[3];
 
-            int val = (int)hls::round(acc + 128);
-            if (val < 0) val = 0;
-            if (val > 255) val = 255;
-
-            out_blk[u][v] = (pixel_t)val;
-        }
+    // -------------------------------------------------------------
+    // Load input PNG using OpenCV (in BGR format)
+    // -------------------------------------------------------------
+    cv::Mat img = cv::imread(input_file, cv::IMREAD_COLOR);
+    if (img.empty()) {
+        std::cerr << "ERROR: Could not load input image " << input_file << "\n";
+        return 1;
     }
-}
 
-// -------------------------------------------------------------
-// Apply DCT to an entire image channel (R / G / B)
-// -------------------------------------------------------------
-static void dct_channel(
-    const pixel_t *in,
-    pixel_t       *out,
-    int            width,
-    int            height
-) {
-#pragma HLS INLINE off
+    int width  = img.cols;
+    int height = img.rows;
 
-    pixel_t blk_in[N][N];
-    pixel_t blk_out[N][N];
-#pragma HLS ARRAY_PARTITION variable=blk_in complete dim=0
-#pragma HLS ARRAY_PARTITION variable=blk_out complete dim=0
+    // Convert BGR → RGB
+    cv::cvtColor(img, img, cv::COLOR_BGR2RGB);
 
-    for (int by = 0; by < height; by += N) {
-        for (int bx = 0; bx < width; bx += N) {
-#pragma HLS PIPELINE II=1
+    // -------------------------------------------------------------
+    // Split channels
+    // -------------------------------------------------------------
+    std::vector<cv::Mat> channels(3);
+    cv::split(img, channels);
 
-            // Load block
-            for (int y = 0; y < N; y++) {
-                for (int x = 0; x < N; x++) {
-#pragma HLS UNROLL
-                    int gx = bx + x;
-                    int gy = by + y;
-                    if (gx < width && gy < height)
-                        blk_in[y][x] = in[gy * width + gx];
-                    else
-                        blk_in[y][x] = 0;
-                }
-            }
+    // Flatten channels
+    std::vector<pixel_t> R(channels[0].begin<pixel_t>(), channels[0].end<pixel_t>());
+    std::vector<pixel_t> G(channels[1].begin<pixel_t>(), channels[1].end<pixel_t>());
+    std::vector<pixel_t> B(channels[2].begin<pixel_t>(), channels[2].end<pixel_t>());
 
-            // Perform DCT
-            dct_block(blk_in, blk_out);
+    size_t img_size = width * height * sizeof(pixel_t);
 
-            // Store block
-            for (int y = 0; y < N; y++) {
-                for (int x = 0; x < N; x++) {
-#pragma HLS UNROLL
-                    int gx = bx + x;
-                    int gy = by + y;
-                    if (gx < width && gy < height)
-                        out[gy * width + gx] = blk_out[y][x];
-                }
-            }
-        }
-    }
-}
+    // -------------------------------------------------------------
+    // Open FPGA device
+    // -------------------------------------------------------------
+    auto device = xrt::device(0);
+    auto xclbin = xrt::xclbin(xclbin_file);
+    device.load_xclbin(xclbin);
 
-// -------------------------------------------------------------
-// Top-level kernel for **RGB** images
-// -------------------------------------------------------------
-extern "C" void dct_rgb(
-    const pixel_t *inR,
-    const pixel_t *inG,
-    const pixel_t *inB,
-    pixel_t       *outR,
-    pixel_t       *outG,
-    pixel_t       *outB,
-    int            width,
-    int            height
-) {
-#pragma HLS INTERFACE m_axi port=inR  offset=slave bundle=gmem0
-#pragma HLS INTERFACE m_axi port=inG  offset=slave bundle=gmem1
-#pragma HLS INTERFACE m_axi port=inB  offset=slave bundle=gmem2
-#pragma HLS INTERFACE m_axi port=outR offset=slave bundle=gmem3
-#pragma HLS INTERFACE m_axi port=outG offset=slave bundle=gmem4
-#pragma HLS INTERFACE m_axi port=outB offset=slave bundle=gmem5
+    auto kernel = xrt::kernel(device, xclbin, "dct");
 
-#pragma HLS INTERFACE s_axilite port=inR   bundle=control
-#pragma HLS INTERFACE s_axilite port=inG   bundle=control
-#pragma HLS INTERFACE s_axilite port=inB   bundle=control
-#pragma HLS INTERFACE s_axilite port=outR  bundle=control
-#pragma HLS INTERFACE s_axilite port=outG  bundle=control
-#pragma HLS INTERFACE s_axilite port=outB  bundle=control
-#pragma HLS INTERFACE s_axilite port=width bundle=control
-#pragma HLS INTERFACE s_axilite port=height bundle=control
-#pragma HLS INTERFACE s_axilite port=return bundle=control
+    // -------------------------------------------------------------
+    // Allocate device memory buffers
+    // -------------------------------------------------------------
+    auto bo_inR  = xrt::bo(device, img_size, xrt::bo::flags::normal, kernel.group_id(0));
+    auto bo_inG  = xrt::bo(device, img_size, xrt::bo::flags::normal, kernel.group_id(1));
+    auto bo_inB  = xrt::bo(device, img_size, xrt::bo::flags::normal, kernel.group_id(2));
 
-#pragma HLS DATAFLOW
+    auto bo_outR = xrt::bo(device, img_size, xrt::bo::flags::normal, kernel.group_id(3));
+    auto bo_outG = xrt::bo(device, img_size, xrt::bo::flags::normal, kernel.group_id(4));
+    auto bo_outB = xrt::bo(device, img_size, xrt::bo::flags::normal, kernel.group_id(5));
 
-    dct_channel(inR, outR, width, height);
-    dct_channel(inG, outG, width, height);
-    dct_channel(inB, outB, width, height);
+    // -------------------------------------------------------------
+    // Copy inputs to device
+    // -------------------------------------------------------------
+    bo_inR.write(R.data());
+    bo_inG.write(G.data());
+    bo_inB.write(B.data());
+
+    bo_inR.sync(XCL_BO_SYNC_BO_TO_DEVICE);
+    bo_inG.sync(XCL_BO_SYNC_BO_TO_DEVICE);
+    bo_inB.sync(XCL_BO_SYNC_BO_TO_DEVICE);
+
+    // -------------------------------------------------------------
+    // Launch kernel
+    // -------------------------------------------------------------
+    std::cout << "Launching kernel...\n";
+
+    auto run = kernel(bo_inR, bo_inG, bo_inB,
+                      bo_outR, bo_outG, bo_outB,
+                      width, height);
+
+    run.wait();
+
+    std::cout << "Kernel execution complete.\n";
+
+    // -------------------------------------------------------------
+    // Read back output
+    // -------------------------------------------------------------
+    std::vector<pixel_t> outR(width * height);
+    std::vector<pixel_t> outG(width * height);
+    std::vector<pixel_t> outB(width * height);
+
+    bo_outR.sync(XCL_BO_SYNC_BO_FROM_DEVICE);
+    bo_outG.sync(XCL_BO_SYNC_BO_FROM_DEVICE);
+    bo_outB.sync(XCL_BO_SYNC_BO_FROM_DEVICE);
+
+    bo_outR.read(outR.data());
+    bo_outG.read(outG.data());
+    bo_outB.read(outB.data());
+
+    // -------------------------------------------------------------
+    // Merge channels and save PNG
+    // -------------------------------------------------------------
+    cv::Mat outRmat(height, width, CV_8UC1, outR.data());
+    cv::Mat outGmat(height, width, CV_8UC1, outG.data());
+    cv::Mat outBmat(height, width, CV_8UC1, outB.data());
+
+    cv::Mat merged;
+    std::vector<cv::Mat> out_channels = {outRmat, outGmat, outBmat};
+    cv::merge(out_channels, merged);
+
+    // Convert back to BGR for PNG saving
+    cv::cvtColor(merged, merged, cv::COLOR_RGB2BGR);
+
+    cv::imwrite(output_file, merged);
+
+    std::cout << "Saved output image to: " << output_file << "\n";
+    return 0;
 }
