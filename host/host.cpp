@@ -1,13 +1,36 @@
-#include <iostream>
-#include <vector>
-#include <stdexcept>
+// host.cpp
+// Build: g++ host.cpp -o ../build/host.exe -O2 -std=c++17 \
+//          -I. -I/opt/xilinx/xrt/include \
+//          -L/opt/xilinx/xrt/lib -lxrt_coreutil
 
-#include <opencv2/opencv.hpp>
+#define STB_IMAGE_IMPLEMENTATION
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "stb_image.h"
+#include "stb_image_write.h"
+
 #include <xrt/xrt_device.h>
 #include <xrt/xrt_kernel.h>
 #include <xrt/xrt_bo.h>
 
-using pixel_t = unsigned char;
+#include <cstdint>
+#include <vector>
+#include <string>
+#include <iostream>
+#include <cstring>
+
+using pixel_t = uint8_t;
+
+// Helper: pad one channel to newW x newH with zeros (same as golden_encoder)
+static void pad_channel(std::vector<uint8_t>& chan, int w, int h,
+                        int newW, int newH)
+{
+    if (newW == w && newH == h) return;
+    std::vector<uint8_t> out(newW * newH, 0);
+    for (int r = 0; r < h; ++r) {
+        std::memcpy(&out[r * newW], &chan[r * w], w);
+    }
+    chan.swap(out);
+}
 
 int main(int argc, char** argv)
 {
@@ -18,60 +41,75 @@ int main(int argc, char** argv)
     }
 
     std::string xclbin_file = argv[1];
-    std::string input_file  = argv[2];
-    std::string output_file = argv[3];
+    std::string input_png   = argv[2];
+    std::string output_png  = argv[3];
 
-    // -------------------------------------------------------------
-    // Load input PNG using OpenCV (in BGR format)
-    // -------------------------------------------------------------
-    cv::Mat img = cv::imread(input_file, cv::IMREAD_COLOR);
-    if (img.empty()) {
-        std::cerr << "ERROR: Could not load input image " << input_file << "\n";
+    // ------------------------------------------------------------------
+    // Load input image with STB as RGB
+    // ------------------------------------------------------------------
+    int w, h, ch;
+    unsigned char* img = stbi_load(input_png.c_str(), &w, &h, &ch, 3);
+    if (!img) {
+        std::cerr << "ERROR: Failed to load image: " << input_png << "\n";
         return 1;
     }
+    std::cout << "Loaded " << w << "x" << h << " (3 channels)\n";
 
-    int width  = img.cols;
-    int height = img.rows;
+    // Separate planes R,G,B
+    std::vector<uint8_t> R(w * h), G(w * h), B(w * h);
+    for (int i = 0; i < w * h; ++i) {
+        R[i] = img[3 * i + 0];
+        G[i] = img[3 * i + 1];
+        B[i] = img[3 * i + 2];
+    }
+    stbi_image_free(img);
 
-    // Convert BGR → RGB
-    cv::cvtColor(img, img, cv::COLOR_BGR2RGB);
+    // Pad to multiples of 8, same logic as golden_encoder.cpp
+    int newW = (w + 7) & ~7;
+    int newH = (h + 7) & ~7;
+    pad_channel(R, w, h, newW, newH);
+    pad_channel(G, w, h, newW, newH);
+    pad_channel(B, w, h, newW, newH);
 
-    // -------------------------------------------------------------
-    // Split channels
-    // -------------------------------------------------------------
-    std::vector<cv::Mat> channels(3);
-    cv::split(img, channels);
+    std::cout << "Padded to " << newW << "x" << newH << "\n";
 
-    // Flatten channels
-    std::vector<pixel_t> R(channels[0].begin<pixel_t>(), channels[0].end<pixel_t>());
-    std::vector<pixel_t> G(channels[1].begin<pixel_t>(), channels[1].end<pixel_t>());
-    std::vector<pixel_t> B(channels[2].begin<pixel_t>(), channels[2].end<pixel_t>());
+    size_t plane_size_bytes = static_cast<size_t>(newW) * newH * sizeof(pixel_t);
 
-    size_t img_size = width * height * sizeof(pixel_t);
-
-    // -------------------------------------------------------------
-    // Open FPGA device
-    // -------------------------------------------------------------
+    // ------------------------------------------------------------------
+    // Open FPGA device, load xclbin, get kernel "dct"
+    // ------------------------------------------------------------------
+    std::cout << "Opening device 0...\n";
     auto device = xrt::device(0);
+
+    std::cout << "Loading xclbin: " << xclbin_file << "\n";
     auto xclbin = xrt::xclbin(xclbin_file);
     device.load_xclbin(xclbin);
 
+    // Kernel name must match the top function in HLS: "dct"
+    std::cout << "Opening kernel 'dct'...\n";
     auto kernel = xrt::kernel(device, xclbin, "dct");
 
-    // -------------------------------------------------------------
-    // Allocate device memory buffers
-    // -------------------------------------------------------------
-    auto bo_inR  = xrt::bo(device, img_size, xrt::bo::flags::normal, kernel.group_id(0));
-    auto bo_inG  = xrt::bo(device, img_size, xrt::bo::flags::normal, kernel.group_id(1));
-    auto bo_inB  = xrt::bo(device, img_size, xrt::bo::flags::normal, kernel.group_id(2));
+    // ------------------------------------------------------------------
+    // Allocate device buffers (M_AXI bindings depend on your HLS pragmas)
+    // We assume arguments: (inR, inG, inB, outR, outG, outB, width, height)
+    // ------------------------------------------------------------------
+    auto bo_inR  = xrt::bo(device, plane_size_bytes,
+                           xrt::bo::flags::normal, kernel.group_id(0));
+    auto bo_inG  = xrt::bo(device, plane_size_bytes,
+                           xrt::bo::flags::normal, kernel.group_id(1));
+    auto bo_inB  = xrt::bo(device, plane_size_bytes,
+                           xrt::bo::flags::normal, kernel.group_id(2));
 
-    auto bo_outR = xrt::bo(device, img_size, xrt::bo::flags::normal, kernel.group_id(3));
-    auto bo_outG = xrt::bo(device, img_size, xrt::bo::flags::normal, kernel.group_id(4));
-    auto bo_outB = xrt::bo(device, img_size, xrt::bo::flags::normal, kernel.group_id(5));
+    auto bo_outR = xrt::bo(device, plane_size_bytes,
+                           xrt::bo::flags::normal, kernel.group_id(3));
+    auto bo_outG = xrt::bo(device, plane_size_bytes,
+                           xrt::bo::flags::normal, kernel.group_id(4));
+    auto bo_outB = xrt::bo(device, plane_size_bytes,
+                           xrt::bo::flags::normal, kernel.group_id(5));
 
-    // -------------------------------------------------------------
-    // Copy inputs to device
-    // -------------------------------------------------------------
+    // ------------------------------------------------------------------
+    // Copy host → device
+    // ------------------------------------------------------------------
     bo_inR.write(R.data());
     bo_inG.write(G.data());
     bo_inB.write(B.data());
@@ -80,25 +118,28 @@ int main(int argc, char** argv)
     bo_inG.sync(XCL_BO_SYNC_BO_TO_DEVICE);
     bo_inB.sync(XCL_BO_SYNC_BO_TO_DEVICE);
 
-    // -------------------------------------------------------------
+    // ------------------------------------------------------------------
     // Launch kernel
-    // -------------------------------------------------------------
-    std::cout << "Launching kernel...\n";
+    // Signature assumed:
+    //   void dct(const pixel_t* inR, const pixel_t* inG, const pixel_t* inB,
+    //            pixel_t* outR, pixel_t* outG, pixel_t* outB,
+    //            int width, int height)
+    // ------------------------------------------------------------------
+    std::cout << "Running kernel dct(" << newW << "x" << newH << ")...\n";
 
     auto run = kernel(bo_inR, bo_inG, bo_inB,
                       bo_outR, bo_outG, bo_outB,
-                      width, height);
+                      newW, newH);
 
     run.wait();
-
     std::cout << "Kernel execution complete.\n";
 
-    // -------------------------------------------------------------
-    // Read back output
-    // -------------------------------------------------------------
-    std::vector<pixel_t> outR(width * height);
-    std::vector<pixel_t> outG(width * height);
-    std::vector<pixel_t> outB(width * height);
+    // ------------------------------------------------------------------
+    // Copy device → host
+    // ------------------------------------------------------------------
+    std::vector<uint8_t> outR(newW * newH);
+    std::vector<uint8_t> outG(newW * newH);
+    std::vector<uint8_t> outB(newW * newH);
 
     bo_outR.sync(XCL_BO_SYNC_BO_FROM_DEVICE);
     bo_outG.sync(XCL_BO_SYNC_BO_FROM_DEVICE);
@@ -108,22 +149,29 @@ int main(int argc, char** argv)
     bo_outG.read(outG.data());
     bo_outB.read(outB.data());
 
-    // -------------------------------------------------------------
-    // Merge channels and save PNG
-    // -------------------------------------------------------------
-    cv::Mat outRmat(height, width, CV_8UC1, outR.data());
-    cv::Mat outGmat(height, width, CV_8UC1, outG.data());
-    cv::Mat outBmat(height, width, CV_8UC1, outB.data());
+    // ------------------------------------------------------------------
+    // Merge back to RGB and crop to original w,h for writing
+    // ------------------------------------------------------------------
+    std::vector<uint8_t> out_img(static_cast<size_t>(w) * h * 3, 0);
 
-    cv::Mat merged;
-    std::vector<cv::Mat> out_channels = {outRmat, outGmat, outBmat};
-    cv::merge(out_channels, merged);
+    for (int row = 0; row < h; ++row) {
+        for (int col = 0; col < w; ++col) {
+            int idx_padded = row * newW + col;
+            int idx_out    = (row * w + col) * 3;
 
-    // Convert back to BGR for PNG saving
-    cv::cvtColor(merged, merged, cv::COLOR_RGB2BGR);
+            out_img[idx_out + 0] = outR[idx_padded];
+            out_img[idx_out + 1] = outG[idx_padded];
+            out_img[idx_out + 2] = outB[idx_padded];
+        }
+    }
 
-    cv::imwrite(output_file, merged);
+    // Write PNG with original width/height
+    if (!stbi_write_png(output_png.c_str(), w, h, 3,
+                        out_img.data(), w * 3)) {
+        std::cerr << "ERROR: Failed to write output PNG: " << output_png << "\n";
+        return 1;
+    }
 
-    std::cout << "Saved output image to: " << output_file << "\n";
+    std::cout << "Wrote output image: " << output_png << "\n";
     return 0;
 }
