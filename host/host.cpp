@@ -75,16 +75,17 @@ int main(int argc, char** argv)
 
     size_t plane_size_bytes = static_cast<size_t>(newW) * newH * sizeof(pixel_t);
 
-    // ------------------------------------------------------------------
-    // Open FPGA device, load xclbin, get kernel "dct"
-    // ------------------------------------------------------------------
     std::cout << "Opening device 0...\n";
     auto device = xrt::device(0);
-
+    
     std::cout << "Loading xclbin: " << xclbin_file << "\n";
-    auto xclbin = xrt::xclbin(xclbin_file);
-    device.load_xclbin(xclbin);
-
+    
+    // Load xclbin (returns uuid)
+    auto uuid = device.load_xclbin(xclbin_file);
+    
+    // Create kernel
+    std::cout << "Opening kernel 'dct'...\n";
+    auto kernel = xrt::kernel(device, uuid, "dct");
     // Kernel name must match the top function in HLS: "dct"
     std::cout << "Opening kernel 'dct'...\n";
     auto kernel = xrt::kernel(device, xclbin, "dct");
@@ -175,3 +176,4 @@ int main(int argc, char** argv)
     std::cout << "Wrote output image: " << output_png << "\n";
     return 0;
 }
+
