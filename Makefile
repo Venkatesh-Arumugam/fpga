@@ -4,7 +4,7 @@
 
 PLATFORM = xilinx_u280_xdma_201920_3
 
-KERNEL_NAME = dct_rgb
+KERNEL_NAME = dct
 
 HLS_SRC = hls/$(KERNEL_NAME).cpp
 
