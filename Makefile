@@ -2,7 +2,7 @@
 #  Vitis FPGA Build System
 ############################################
 
-PLATFORM = xilinx_u280_xdma_201920_3
+PLATFORM = xilinx_u280_gen3x16_xdma_1_202211_1
 
 KERNEL_NAME = dct
 
