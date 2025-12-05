@@ -10,8 +10,8 @@ KERNEL_NAME = dct_rgb
 HLS_SRC     = dct_rgb_kernel.cpp
 
 # Host source
-HOST_SRC    = host.cpp
-HOST_EXE    = build/host
+HLS_SRC = hls/dct_rgb_kernel.cpp
+HOST_SRC = host/host.cpp
 
 # Output files
 TARGET ?= hw        # default build target = hardware
