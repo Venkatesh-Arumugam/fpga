@@ -60,7 +60,7 @@ static void dct_2d(pixel_t in_blk[8][8], pixel_t out_blk[8][8]) {
     }
 }
 
-extern "C" void dct(
+extern "C" void dct_rgb(
     const pixel_t* inR,
     const pixel_t* inG,
     const pixel_t* inB,
@@ -145,3 +145,4 @@ extern "C" void dct(
         }
     }
 }
+
