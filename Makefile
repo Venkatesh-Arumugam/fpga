@@ -1,21 +1,24 @@
 ############################################
-#  Vitis FPGA Build System
+#  Vitis FPGA Build System (Updated for DCT RGB Project)
 ############################################
 
-PLATFORM = xilinx_u280_gen3x16_xdma_1_202211_1
-KERNEL_NAME = dct
+# FPGA platform on CloudLab/NERC U280 nodes
+PLATFORM = xilinx_u280_gen3x16_xdma_base_1
 
-# Targets: sw_emu / hw_emu / hw
-TARGET ?= hw_emu
+# Kernel name and sources
+KERNEL_NAME = dct_rgb
+HLS_SRC     = dct_rgb_kernel.cpp
 
-HLS_SRC      = hls/$(KERNEL_NAME).cpp
-XO_FILE      = build/$(KERNEL_NAME)_$(TARGET).xo
-XCLBIN_FILE  = build/$(KERNEL_NAME)_$(TARGET).xclbin
+# Host source
+HOST_SRC    = host.cpp
+HOST_EXE    = build/host
 
-HOST_SRC     = host/host.cpp
-HOST_EXE     = build/host.exe
+# Output files
+TARGET ?= hw        # default build target = hardware
+XO_FILE     = build/$(KERNEL_NAME)_$(TARGET).xo
+XCLBIN_FILE = build/$(KERNEL_NAME)_$(TARGET).xclbin
 
-# XRT dirs
+# XRT include / lib (auto-discovered from environment)
 XRT_INC = $(XILINX_XRT)/include
 XRT_LIB = $(XILINX_XRT)/lib
 
@@ -26,7 +29,7 @@ build_dir:
 	mkdir -p build
 
 ############################################
-# Compile HLS → XO
+# Compile Kernel (HLS → XO)
 ############################################
 xo: build_dir
 	v++ -c -t $(TARGET) \
@@ -36,7 +39,7 @@ xo: build_dir
 	    $(HLS_SRC)
 
 ############################################
-# Link XO → XCLBIN
+# Link Kernel (XO → XCLBIN)
 ############################################
 xclbin: xo
 	v++ -l -t $(TARGET) \
@@ -45,33 +48,33 @@ xclbin: xo
 	    -o $(XCLBIN_FILE)
 
 ############################################
-# Compile host
+# Build Host Executable
 ############################################
 host: build_dir
 	g++ $(HOST_SRC) -o $(HOST_EXE) -O2 \
 	    -I$(XRT_INC) \
 	    -L$(XRT_LIB) \
-	    -lxrt_coreutil -lpthread
+	    -lxrt_coreutil -pthread
 
 ############################################
-# Build everything (kernel + host)
+# Build Everything
 ############################################
 all: xo xclbin host
 
 ############################################
-# Convenience targets
+# Convenience Targets
 ############################################
 sw_emu:
-	make TARGET=sw_emu all
+	$(MAKE) TARGET=sw_emu all
 
 hw_emu:
-	make TARGET=hw_emu all
+	$(MAKE) TARGET=hw_emu all
 
 hw:
-	make TARGET=hw all
+	$(MAKE) TARGET=hw all
 
 ############################################
 # Clean
 ############################################
 clean:
-	rm -rf build *.log _x .run
+	rm -rf build *.log *.jou _x .run
