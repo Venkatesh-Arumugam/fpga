@@ -3,7 +3,7 @@
 ############################################
 
 # FPGA platform on CloudLab/NERC U280 nodes
-PLATFORM = xilinx_u280_gen3x16_xdma_base_1
+PLATFORM = xilinx_u280_gen3x16_xdma_1_202211_1
 
 # Kernel name and sources
 KERNEL_NAME = dct_rgb
