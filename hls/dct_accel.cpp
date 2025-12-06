@@ -26,9 +26,8 @@ static void dct_2d(pixel_t in_blk[8][8], coeff_t out_blk[8][8]) {
 #pragma HLS ARRAY_PARTITION variable=tmp complete dim=0
 
     // --------------------------
-    // Row Transform - FIXED
-    // For each output row u and column v:
-    // tmp[u][v] = sum_x C[u][x] * (in[x][v] - 128)
+    // Row Transform (process each row v)
+    // tmp[u][v] = sum_x C[u][x] * (in[v][x] - 128)
     // --------------------------
     for (int u = 0; u < 8; u++) {
 #pragma HLS UNROLL
@@ -37,16 +36,15 @@ static void dct_2d(pixel_t in_blk[8][8], coeff_t out_blk[8][8]) {
             dct_t acc = 0;
             for (int x = 0; x < 8; x++) {
 #pragma HLS UNROLL
-                // FIXED: Changed in_blk[v][x] to in_blk[x][v]
-                acc += C[u][x] * (dct_t)((int)in_blk[x][v] - 128);
+                // Process row v, transform to frequency u
+                acc += C[u][x] * (dct_t)((int)in_blk[v][x] - 128);
             }
             tmp[u][v] = acc;
         }
     }
 
     // --------------------------
-    // Column Transform - FIXED
-    // For each position (u,v):
+    // Column Transform
     // out[u][v] = sum_y tmp[u][y] * C[v][y]
     // --------------------------
     for (int u = 0; u < 8; u++) {
@@ -124,4 +122,5 @@ extern "C" void dct_accel(
         }
     }
 }
+
 
