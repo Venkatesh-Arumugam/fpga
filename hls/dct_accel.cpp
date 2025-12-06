@@ -25,11 +25,9 @@ static void dct_2d(pixel_t in_blk[8][8], coeff_t out_blk[8][8]) {
     dct_t tmp[8][8];
 #pragma HLS ARRAY_PARTITION variable=tmp complete dim=0
 
-    // --------------------------
-    // Row Transform
-    // For each spatial row y, compute all frequencies u
-    // tmp[y][u] = sum_x C[u][x] * (in_blk[y][x] - 128)
-    // --------------------------
+    // Pass 1: Row transform
+    // For each input row y, compute all frequency components u
+    // tmp[y][u] = Σ_x C[u][x] * (in_blk[y][x] - 128)
     for (int y = 0; y < 8; y++) {
 #pragma HLS UNROLL
         for (int u = 0; u < 8; u++) {
@@ -43,11 +41,9 @@ static void dct_2d(pixel_t in_blk[8][8], coeff_t out_blk[8][8]) {
         }
     }
 
-    // --------------------------
-    // Column Transform
-    // For each frequency pair (u,v), sum over spatial rows y
-    // out_blk[u][v] = sum_y C[v][y] * tmp[y][u]
-    // --------------------------
+    // Pass 2: Column transform  
+    // For each frequency pair (u,v), sum over input rows y
+    // out_blk[u][v] = Σ_y C[v][y] * tmp[y][u]
     for (int u = 0; u < 8; u++) {
 #pragma HLS UNROLL
         for (int v = 0; v < 8; v++) {
@@ -123,6 +119,7 @@ extern "C" void dct_accel(
         }
     }
 }
+
 
 
 
