@@ -48,23 +48,25 @@ static const int zigzag[64] = {
 inline void dct_block_cpu(const pixel_t in[8][8], coeff_t out[8][8]) {
     double tmp[8][8];
 
-    // Row transform
-    for (int u = 0; u < N; u++) {
-        for (int v = 0; v < N; v++) {
+    // Row transform: For each spatial row y, compute all frequencies u
+    // tmp[y][u] = sum_x C[u][x] * (in[y][x] - 128)
+    for (int y = 0; y < N; y++) {
+        for (int u = 0; u < N; u++) {
             double acc = 0.0;
             for (int x = 0; x < N; x++) {
-                acc += C_d[u][x] * (double(in[x][v]) - 128.0);
+                acc += C_d[u][x] * (double(in[y][x]) - 128.0);
             }
-            tmp[u][v] = acc;
+            tmp[y][u] = acc;
         }
     }
 
-    // Column transform
+    // Column transform: For each frequency pair (u,v), sum over rows y
+    // out[u][v] = sum_y C[v][y] * tmp[y][u]
     for (int u = 0; u < N; u++) {
         for (int v = 0; v < N; v++) {
             double acc = 0.0;
             for (int y = 0; y < N; y++) {
-                acc += tmp[u][y] * C_d[v][y];
+                acc += C_d[v][y] * tmp[y][u];
             }
             int val = (int)std::lround(acc);
             if (val < -32768) val = -32768;
@@ -77,28 +79,30 @@ inline void dct_block_cpu(const pixel_t in[8][8], coeff_t out[8][8]) {
 inline void idct_block_cpu(const coeff_t in[8][8], pixel_t out[8][8]) {
     double tmp[8][8];
 
-    // tmp[x][v] = sum_u C[u][x] * F[u][v]
-    for (int x = 0; x < N; x++) {
-        for (int v = 0; v < N; v++) {
+    // Inverse column transform: For each spatial row y, sum over freq v
+    // tmp[y][u] = sum_v C[v][y] * in[u][v]
+    for (int y = 0; y < N; y++) {
+        for (int u = 0; u < N; u++) {
             double acc = 0.0;
-            for (int u = 0; u < N; u++) {
-                acc += C_d[u][x] * (double)in[u][v];
+            for (int v = 0; v < N; v++) {
+                acc += C_d[v][y] * (double)in[u][v];
             }
-            tmp[x][v] = acc;
+            tmp[y][u] = acc;
         }
     }
 
-    // X[x][y] = sum_v tmp[x][v] * C[y][v] + 128
-    for (int x = 0; x < N; x++) {
-        for (int y = 0; y < N; y++) {
+    // Inverse row transform: For each spatial position (y,x), sum over freq u
+    // out[y][x] = sum_u C[u][x] * tmp[y][u] + 128
+    for (int y = 0; y < N; y++) {
+        for (int x = 0; x < N; x++) {
             double acc = 0.0;
-            for (int v = 0; v < N; v++) {
-                acc += tmp[x][v] * C_d[y][v];
+            for (int u = 0; u < N; u++) {
+                acc += C_d[u][x] * tmp[y][u];
             }
             int val = (int)std::lround(acc + 128.0);
             if (val < 0)   val = 0;
             if (val > 255) val = 255;
-            out[x][y] = (pixel_t)val;
+            out[y][x] = (pixel_t)val;
         }
     }
 }
