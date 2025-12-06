@@ -19,7 +19,7 @@ XRT_INC = $(XILINX_XRT)/include
 XRT_LIB = $(XILINX_XRT)/lib
 
 # Input sources
-HLS_SRC      = hls/$(KERNEL_NAME)_kernel.cpp
+HLS_SRC = hls/$(VERSION)_$(KERNEL_NAME)_kernel.cpp
 XO_FILE      = build/$(KERNEL_NAME)_$(TARGET).xo
 XCLBIN_FILE  = build/$(KERNEL_NAME)_$(TARGET).xclbin
 
