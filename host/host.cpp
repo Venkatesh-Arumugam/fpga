@@ -135,6 +135,17 @@ int main(int argc, char *argv[]) {
     bo_outG.read(outG.data());
     bo_outB.read(outB.data());
 
+
+
+    // DEBUG: Print first 32 output pixels from FPGA
+std::cout << "\n===== FPGA RAW OUTPUT (first 32 pixels) =====\n";
+for (int i = 0; i < 32; i++) {
+    std::cout << "R[" << i << "]=" << (int)R_out[i]
+              << " G[" << i << "]=" << (int)G_out[i]
+              << "  B[" << i << "]=" << (int)B_out[i] << "\n";
+}
+std::cout << "============================================\n\n";
+
     // -----------------------------------------------------------
     // Apply CPU IDCT
     // -----------------------------------------------------------
@@ -200,3 +211,4 @@ int main(int argc, char *argv[]) {
     std::cout << "Reconstructed image written to " << output_path << "\n";
     return 0;
 }
+
