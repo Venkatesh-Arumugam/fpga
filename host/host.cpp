@@ -1,4 +1,4 @@
-// host.cpp – CPU side for DCT8x8_color on U280
+// host.cpp – CPU side for dct_rgb on U280 (pure RGB + PSNR)
 #include <iostream>
 #include <vector>
 #include <chrono>
@@ -13,7 +13,6 @@
 #include "experimental/xrt_xclbin.h"
 
 // ---- stb_image / stb_image_write ---------------------------
-// Download these headers and put them in your project.
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
@@ -29,66 +28,25 @@ static void check(bool cond, const std::string &msg) {
     }
 }
 
-// RGB (0–255) -> YCbCr (0–255) – BT.601-like
-static void rgb_to_ycbcr(
-    const std::vector<pixel_t> &rgb,
-    std::vector<pixel_t>       &Y,
-    std::vector<pixel_t>       &Cb,
-    std::vector<pixel_t>       &Cr)
+// -------------------------------------------------------
+// PSNR utilities
+// -------------------------------------------------------
+double compute_mse(const std::vector<uint8_t>& a,
+                   const std::vector<uint8_t>& b)
 {
-    size_t n = Y.size();
-    for (size_t i = 0; i < n; ++i) {
-        float r = rgb[3 * i + 0];
-        float g = rgb[3 * i + 1];
-        float b = rgb[3 * i + 2];
-
-        float y  =  0.2990f * r + 0.5870f * g + 0.1140f * b;
-        float cb = -0.1687f * r - 0.3313f * g + 0.5000f * b + 128.0f;
-        float cr =  0.5000f * r - 0.4187f * g - 0.0813f * b + 128.0f;
-
-        int iy  = std::lround(y);
-        int icb = std::lround(cb);
-        int icr = std::lround(cr);
-
-        if (iy  <   0) iy  = 0;   if (iy  > 255) iy  = 255;
-        if (icb <   0) icb = 0;   if (icb > 255) icb = 255;
-        if (icr <   0) icr = 0;   if (icr > 255) icr = 255;
-
-        Y[i]  = static_cast<pixel_t>(iy);
-        Cb[i] = static_cast<pixel_t>(icb);
-        Cr[i] = static_cast<pixel_t>(icr);
+    double mse = 0.0;
+    size_t n = a.size();
+    for (size_t i = 0; i < n; i++) {
+        double d = double(a[i]) - double(b[i]);
+        mse += d * d;
     }
+    return mse / double(n);
 }
 
-// YCbCr -> RGB (clamped 0–255)
-static void ycbcr_to_rgb(
-    const std::vector<pixel_t> &Y,
-    const std::vector<pixel_t> &Cb,
-    const std::vector<pixel_t> &Cr,
-    std::vector<pixel_t>       &rgb)
+double compute_psnr(double mse)
 {
-    size_t n = Y.size();
-    for (size_t i = 0; i < n; ++i) {
-        float y  = Y[i];
-        float cb = Cb[i] - 128.0f;
-        float cr = Cr[i] - 128.0f;
-
-        float r = y + 1.402f    * cr;
-        float g = y - 0.344136f * cb - 0.714136f * cr;
-        float b = y + 1.772f    * cb;
-
-        int ir = std::lround(r);
-        int ig = std::lround(g);
-        int ib = std::lround(b);
-
-        if (ir < 0) ir = 0; if (ir > 255) ir = 255;
-        if (ig < 0) ig = 0; if (ig > 255) ig = 255;
-        if (ib < 0) ib = 0; if (ib > 255) ib = 255;
-
-        rgb[3 * i + 0] = static_cast<pixel_t>(ir);
-        rgb[3 * i + 1] = static_cast<pixel_t>(ig);
-        rgb[3 * i + 2] = static_cast<pixel_t>(ib);
-    }
+    if (mse == 0.0) return 100.0; // identical images
+    return 10.0 * std::log10((255.0 * 255.0) / mse);
 }
 
 int main(int argc, char *argv[]) {
@@ -105,7 +63,7 @@ int main(int argc, char *argv[]) {
         int iterations = (argc > 4) ? std::stoi(argv[4]) : 10;
 
         // --------------------------------------------------------------------
-        // 1) Load image
+        // 1) Load image (RGB)
         // --------------------------------------------------------------------
         int width = 0, height = 0, channels = 0;
         unsigned char *img_data = stbi_load(input_path.c_str(),
@@ -123,12 +81,16 @@ int main(int argc, char *argv[]) {
         std::cout << "Loaded " << input_path << " (" << width
                   << "x" << height << ", 3ch)\n";
 
-        // Planar Y, Cb, Cr
-        std::vector<pixel_t> Y(num_pixels), Cb(num_pixels), Cr(num_pixels);
-        rgb_to_ycbcr(rgb_in, Y, Cb, Cr);
+        // Split into planar R/G/B
+        std::vector<pixel_t> R(num_pixels), G(num_pixels), B(num_pixels);
+        for (size_t i = 0; i < num_pixels; ++i) {
+            R[i] = rgb_in[3 * i + 0];
+            G[i] = rgb_in[3 * i + 1];
+            B[i] = rgb_in[3 * i + 2];
+        }
 
         // Output planar buffers
-        std::vector<pixel_t> Y_out(num_pixels), Cb_out(num_pixels), Cr_out(num_pixels);
+        std::vector<pixel_t> R_out(num_pixels), G_out(num_pixels), B_out(num_pixels);
 
         // --------------------------------------------------------------------
         // 2) Open device and load xclbin
@@ -140,28 +102,28 @@ int main(int argc, char *argv[]) {
         auto xclbin = xrt::xclbin(xclbin_path);
         auto uuid   = device.load_xclbin(xclbin);
 
-        std::cout << "Creating kernel handle dct8x8_color...\n";
-        xrt::kernel krnl{device, uuid, "dct8x8_color"};
+        std::cout << "Creating kernel handle dct_rgb...\n";
+        xrt::kernel krnl{device, uuid, "dct_rgb"};
 
         // --------------------------------------------------------------------
         // 3) Create buffers and copy host data
         // --------------------------------------------------------------------
         size_t bytes = num_pixels * sizeof(pixel_t);
 
-        xrt::bo bo_inY  {device, bytes, krnl.group_id(0)};
-        xrt::bo bo_inCb {device, bytes, krnl.group_id(1)};
-        xrt::bo bo_inCr {device, bytes, krnl.group_id(2)};
-        xrt::bo bo_outY {device, bytes, krnl.group_id(3)};
-        xrt::bo bo_outCb{device, bytes, krnl.group_id(4)};
-        xrt::bo bo_outCr{device, bytes, krnl.group_id(5)};
+        xrt::bo bo_inR  {device, bytes, krnl.group_id(0)};
+        xrt::bo bo_inG  {device, bytes, krnl.group_id(1)};
+        xrt::bo bo_inB  {device, bytes, krnl.group_id(2)};
+        xrt::bo bo_outR {device, bytes, krnl.group_id(3)};
+        xrt::bo bo_outG {device, bytes, krnl.group_id(4)};
+        xrt::bo bo_outB {device, bytes, krnl.group_id(5)};
 
-        bo_inY.write(Y.data());
-        bo_inCb.write(Cb.data());
-        bo_inCr.write(Cr.data());
+        bo_inR.write(R.data());
+        bo_inG.write(G.data());
+        bo_inB.write(B.data());
 
-        bo_inY.sync(XCL_BO_SYNC_BO_TO_DEVICE);
-        bo_inCb.sync(XCL_BO_SYNC_BO_TO_DEVICE);
-        bo_inCr.sync(XCL_BO_SYNC_BO_TO_DEVICE);
+        bo_inR.sync(XCL_BO_SYNC_BO_TO_DEVICE);
+        bo_inG.sync(XCL_BO_SYNC_BO_TO_DEVICE);
+        bo_inB.sync(XCL_BO_SYNC_BO_TO_DEVICE);
 
         // --------------------------------------------------------------------
         // 4) Run kernel (benchmark base version)
@@ -170,8 +132,8 @@ int main(int argc, char *argv[]) {
 
         // Warm-up
         {
-            auto run = krnl(bo_inY, bo_inCb, bo_inCr,
-                            bo_outY, bo_outCb, bo_outCr,
+            auto run = krnl(bo_inR, bo_inG, bo_inB,
+                            bo_outR, bo_outG, bo_outB,
                             width, height);
             run.wait();
         }
@@ -180,8 +142,8 @@ int main(int argc, char *argv[]) {
         for (int it = 0; it < iterations; ++it) {
             auto t0 = std::chrono::high_resolution_clock::now();
 
-            auto run = krnl(bo_inY, bo_inCb, bo_inCr,
-                            bo_outY, bo_outCb, bo_outCr,
+            auto run = krnl(bo_inR, bo_inG, bo_inB,
+                            bo_outR, bo_outG, bo_outB,
                             width, height);
             run.wait();
 
@@ -200,19 +162,46 @@ int main(int argc, char *argv[]) {
         // --------------------------------------------------------------------
         // 5) Copy results back to host
         // --------------------------------------------------------------------
-        bo_outY.sync(XCL_BO_SYNC_BO_FROM_DEVICE);
-        bo_outCb.sync(XCL_BO_SYNC_BO_FROM_DEVICE);
-        bo_outCr.sync(XCL_BO_SYNC_BO_FROM_DEVICE);
+        bo_outR.sync(XCL_BO_SYNC_BO_FROM_DEVICE);
+        bo_outG.sync(XCL_BO_SYNC_BO_FROM_DEVICE);
+        bo_outB.sync(XCL_BO_SYNC_BO_FROM_DEVICE);
 
-        bo_outY.read(Y_out.data());
-        bo_outCb.read(Cb_out.data());
-        bo_outCr.read(Cr_out.data());
+        bo_outR.read(R_out.data());
+        bo_outG.read(G_out.data());
+        bo_outB.read(B_out.data());
 
         // --------------------------------------------------------------------
-        // 6) Convert back to RGB and save image
+        // 6) Compute PSNR (per-channel + overall RGB)
+        // --------------------------------------------------------------------
+        std::cout << "\n=== PSNR Analysis (RGB) ===\n";
+
+        // Original planar channels (R,G,B) are already in R, G, B
+        double mseR = compute_mse(R, R_out);
+        double mseG = compute_mse(G, G_out);
+        double mseB = compute_mse(B, B_out);
+
+        double psnrR = compute_psnr(mseR);
+        double psnrG = compute_psnr(mseG);
+        double psnrB = compute_psnr(mseB);
+
+        std::cout << "R   : MSE = " << mseR << ", PSNR = " << psnrR << " dB\n";
+        std::cout << "G   : MSE = " << mseG << ", PSNR = " << psnrG << " dB\n";
+        std::cout << "B   : MSE = " << mseB << ", PSNR = " << psnrB << " dB\n";
+
+        double mse_rgb_total = (mseR + mseG + mseB) / 3.0;
+        double psnr_rgb_total = compute_psnr(mse_rgb_total);
+
+        std::cout << "Overall RGB PSNR = " << psnr_rgb_total << " dB\n\n";
+
+        // --------------------------------------------------------------------
+        // 7) Recombine RGB and save image
         // --------------------------------------------------------------------
         std::vector<pixel_t> rgb_out(num_pixels * 3);
-        ycbcr_to_rgb(Y_out, Cb_out, Cr_out, rgb_out);
+        for (size_t i = 0; i < num_pixels; ++i) {
+            rgb_out[3 * i + 0] = R_out[i];
+            rgb_out[3 * i + 1] = G_out[i];
+            rgb_out[3 * i + 2] = B_out[i];
+        }
 
         int stride = width * 3;
         if (!stbi_write_png(output_path.c_str(), width, height,
