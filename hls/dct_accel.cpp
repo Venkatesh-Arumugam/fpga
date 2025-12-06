@@ -26,26 +26,27 @@ static void dct_2d(pixel_t in_blk[8][8], coeff_t out_blk[8][8]) {
 #pragma HLS ARRAY_PARTITION variable=tmp complete dim=0
 
     // --------------------------
-    // Row Transform (process each row v)
-    // tmp[u][v] = sum_x C[u][x] * (in[v][x] - 128)
+    // Row Transform
+    // For each spatial row y, compute all frequencies u
+    // tmp[y][u] = sum_x C[u][x] * (in_blk[y][x] - 128)
     // --------------------------
-    for (int u = 0; u < 8; u++) {
+    for (int y = 0; y < 8; y++) {
 #pragma HLS UNROLL
-        for (int v = 0; v < 8; v++) {
+        for (int u = 0; u < 8; u++) {
 #pragma HLS UNROLL
             dct_t acc = 0;
             for (int x = 0; x < 8; x++) {
 #pragma HLS UNROLL
-                // Process row v, transform to frequency u
-                acc += C[u][x] * (dct_t)((int)in_blk[v][x] - 128);
+                acc += C[u][x] * (dct_t)((int)in_blk[y][x] - 128);
             }
-            tmp[u][v] = acc;
+            tmp[y][u] = acc;
         }
     }
 
     // --------------------------
     // Column Transform
-    // out[u][v] = sum_y tmp[u][y] * C[v][y]
+    // For each frequency pair (u,v), sum over spatial rows y
+    // out_blk[u][v] = sum_y C[v][y] * tmp[y][u]
     // --------------------------
     for (int u = 0; u < 8; u++) {
 #pragma HLS UNROLL
@@ -54,7 +55,7 @@ static void dct_2d(pixel_t in_blk[8][8], coeff_t out_blk[8][8]) {
             dct_t acc = 0;
             for (int y = 0; y < 8; y++) {
 #pragma HLS UNROLL
-                acc += tmp[u][y] * C[v][y];
+                acc += C[v][y] * tmp[y][u];
             }
             int val = (int)hls::round(acc);
             out_blk[u][v] = (coeff_t)val;
@@ -122,5 +123,6 @@ extern "C" void dct_accel(
         }
     }
 }
+
 
 
