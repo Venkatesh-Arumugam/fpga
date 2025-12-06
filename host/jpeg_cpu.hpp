@@ -48,8 +48,8 @@ static const int zigzag[64] = {
 inline void dct_block_cpu(const pixel_t in[8][8], coeff_t out[8][8]) {
     double tmp[8][8];
 
-    // Row transform: For each spatial row y, compute all frequencies u
-    // tmp[y][u] = sum_x C[u][x] * (in[y][x] - 128)
+    // Pass 1: Row transform
+    // tmp[y][u] = Σ_x C[u][x] * (in[y][x] - 128)
     for (int y = 0; y < N; y++) {
         for (int u = 0; u < N; u++) {
             double acc = 0.0;
@@ -60,8 +60,8 @@ inline void dct_block_cpu(const pixel_t in[8][8], coeff_t out[8][8]) {
         }
     }
 
-    // Column transform: For each frequency pair (u,v), sum over rows y
-    // out[u][v] = sum_y C[v][y] * tmp[y][u]
+    // Pass 2: Column transform
+    // out[u][v] = Σ_y C[v][y] * tmp[y][u]
     for (int u = 0; u < N; u++) {
         for (int v = 0; v < N; v++) {
             double acc = 0.0;
@@ -76,11 +76,14 @@ inline void dct_block_cpu(const pixel_t in[8][8], coeff_t out[8][8]) {
     }
 }
 
+// ============================================
+// INVERSE DCT (CPU)
+// ============================================
 inline void idct_block_cpu(const coeff_t in[8][8], pixel_t out[8][8]) {
     double tmp[8][8];
 
-    // Inverse column transform: For each spatial row y, sum over freq v
-    // tmp[y][u] = sum_v C[v][y] * in[u][v]
+    // Pass 1: Inverse column transform
+    // tmp[y][u] = Σ_v C[v][y] * in[u][v]
     for (int y = 0; y < N; y++) {
         for (int u = 0; u < N; u++) {
             double acc = 0.0;
@@ -91,8 +94,8 @@ inline void idct_block_cpu(const coeff_t in[8][8], pixel_t out[8][8]) {
         }
     }
 
-    // Inverse row transform: For each spatial position (y,x), sum over freq u
-    // out[y][x] = sum_u C[u][x] * tmp[y][u] + 128
+    // Pass 2: Inverse row transform
+    // out[y][x] = Σ_u C[u][x] * tmp[y][u] + 128
     for (int y = 0; y < N; y++) {
         for (int x = 0; x < N; x++) {
             double acc = 0.0;
@@ -106,7 +109,6 @@ inline void idct_block_cpu(const coeff_t in[8][8], pixel_t out[8][8]) {
         }
     }
 }
-
 // Quantize 8x8 block using Q_luma (you can adapt for chroma if needed)
 inline void quant_block(const coeff_t in[8][8], coeff_t out[8][8]) {
     for (int y = 0; y < 8; y++) {
