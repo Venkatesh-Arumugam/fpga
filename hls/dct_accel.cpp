@@ -4,7 +4,7 @@
 
 typedef ap_uint<8>    pixel_t;
 typedef ap_fixed<24,6> dct_t;   
-typedef ap_int<16>    coeff_t;  // CRITICAL: Changed from ap_int<18> to match host int16_t
+typedef ap_int<16>    coeff_t;
 
 static const int N = 8;
 
@@ -19,16 +19,18 @@ static const dct_t C[N][N] = {
     {0.097545,-0.277785, 0.415735,-0.490393, 0.490393,-0.415735, 0.277785,-0.097545}
 };
 
-// CORRECTED DCT with proper indexing
 static void dct_2d(pixel_t in_blk[8][8], coeff_t out_blk[8][8]) {
 #pragma HLS INLINE
 
     dct_t tmp[8][8];
 #pragma HLS ARRAY_PARTITION variable=tmp complete dim=0
 
-    // Row transform: For each row y, compute all frequencies u
-    // tmp[y][u] = sum_x C[u][x] * (in_blk[y][x] - 128)
-    for (int y = 0; y < 8; y++) {
+    // --------------------------
+    // Pass 1: Row Transform
+    // For each input row y, compute DCT giving frequency components u
+    // tmp[y][u] = Σ_x C[u][x] * (in_blk[y][x] - 128)
+    // --------------------------
+    ROW_LOOP: for (int y = 0; y < 8; y++) {
 #pragma HLS UNROLL
         for (int u = 0; u < 8; u++) {
 #pragma HLS UNROLL
@@ -41,9 +43,12 @@ static void dct_2d(pixel_t in_blk[8][8], coeff_t out_blk[8][8]) {
         }
     }
 
-    // Column transform: For each frequency pair (u,v)
-    // out_blk[u][v] = sum_y C[v][y] * tmp[y][u]
-    for (int u = 0; u < 8; u++) {
+    // --------------------------
+    // Pass 2: Column Transform
+    // For each frequency component (u,v), sum over spatial rows y
+    // out_blk[u][v] = Σ_y C[v][y] * tmp[y][u]
+    // --------------------------
+    COL_LOOP: for (int u = 0; u < 8; u++) {
 #pragma HLS UNROLL
         for (int v = 0; v < 8; v++) {
 #pragma HLS UNROLL
@@ -78,18 +83,21 @@ extern "C" void dct_accel(
 #pragma HLS ARRAY_PARTITION variable=G_coef complete dim=0
 #pragma HLS ARRAY_PARTITION variable=B_coef complete dim=0
 
-    for (int by = 0; by < height; by += 8) {
-        for (int bx = 0; bx < width; bx += 8) {
+    BLOCK_Y: for (int by = 0; by < height; by += 8) {
+        BLOCK_X: for (int bx = 0; bx < width; bx += 8) {
 
-            // Load block
-            for (int y = 0; y < 8; y++) {
-                for (int x = 0; x < 8; x++) {
+            // --------------------------
+            // Load 8x8 block from memory
+            // --------------------------
+            LOAD_Y: for (int y = 0; y < 8; y++) {
+                LOAD_X: for (int x = 0; x < 8; x++) {
                     int gx = bx + x;
                     int gy = by + y;
                     if (gx < width && gy < height) {
-                        R_blk[y][x] = inR[gy * width + gx];
-                        G_blk[y][x] = inG[gy * width + gx];
-                        B_blk[y][x] = inB[gy * width + gx];
+                        int idx = gy * width + gx;
+                        R_blk[y][x] = inR[idx];
+                        G_blk[y][x] = inG[idx];
+                        B_blk[y][x] = inB[idx];
                     } else {
                         R_blk[y][x] = 0;
                         G_blk[y][x] = 0;
@@ -98,21 +106,29 @@ extern "C" void dct_accel(
                 }
             }
 
+            // --------------------------
+            // Compute DCT for each channel
+            // --------------------------
             dct_2d(R_blk, R_coef);
             dct_2d(G_blk, G_coef);
             dct_2d(B_blk, B_coef);
 
-            // Store block - CRITICAL FIX: Swap indices to [x][y]
-            // This corrects the transpose issue
-            for (int y = 0; y < 8; y++) {
-                for (int x = 0; x < 8; x++) {
+            // --------------------------
+            // Store DCT coefficients
+            // Note: We store R_coef[u][v] at position (by+u, bx+v)
+            // This matches the expected layout where coefficient [u][v]
+            // goes to spatial position (u, v) within the block
+            // --------------------------
+            STORE_Y: for (int y = 0; y < 8; y++) {
+                STORE_X: for (int x = 0; x < 8; x++) {
                     int gx = bx + x;
                     int gy = by + y;
                     if (gx < width && gy < height) {
                         int idx = gy * width + gx;
-                        outR[idx] = R_coef[x][y];  // Fixed: was R_coef[y][x]
-                        outG[idx] = G_coef[x][y];  // Fixed: was G_coef[y][x]
-                        outB[idx] = B_coef[x][y];  // Fixed: was B_coef[y][x]
+                        // Store coefficient [y][x] at position (gy, gx)
+                        outR[idx] = R_coef[y][x];
+                        outG[idx] = G_coef[y][x];
+                        outB[idx] = B_coef[y][x];
                     }
                 }
             }
