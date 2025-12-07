@@ -2,7 +2,7 @@
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image.h"
 #include "stb_image_write.h"
-
+#include <iomanip>
 #include <xrt/xrt_device.h>
 #include <xrt/xrt_kernel.h>
 #include <xrt/xrt_bo.h>
@@ -13,7 +13,7 @@
 #include <cstdint>
 #include <cassert>
 
-#include "jpeg_cpu.hpp"   // from above
+#include "jpeg_cpu.hpp"
 
 using std::vector;
 using std::cout;
@@ -193,7 +193,92 @@ int main(int argc, char** argv)
         if (Bcoef_fpga[i] != Bcoef_cpu[i]) diff_count++;
     }
     cout << "Coefficient mismatches (R+G+B total entries): " << diff_count << "\n";
+cout << "\n=== TRANSPOSE VERIFICATION ===\n";
+cout << "First 8x8 block comparison:\n\n";
 
+cout << "FPGA coefficients (as stored):\n";
+for (int i = 0; i < 8; i++) {
+    for (int j = 0; j < 8; j++) {
+        int idx = i * w + j;
+        cout << std::setw(6) << Rcoef_fpga[idx] << " ";
+    }
+    cout << "\n";
+}
+
+cout << "\nCPU coefficients (expected):\n";
+for (int i = 0; i < 8; i++) {
+    for (int j = 0; j < 8; j++) {
+        int idx = i * w + j;
+        cout << std::setw(6) << Rcoef_cpu[idx] << " ";
+    }
+    cout << "\n";
+}
+
+cout << "\nOriginal pixels (first 8x8):\n";
+for (int i = 0; i < 8; i++) {
+    for (int j = 0; j < 8; j++) {
+        int idx = i * w + j;
+        cout << std::setw(4) << (int)R[idx] << " ";
+    }
+    cout << "\n";
+}
+
+// Check if FPGA output is transpose of CPU
+cout << "\nChecking if FPGA = transpose(CPU):\n";
+bool is_transpose = true;
+for (int i = 0; i < 8; i++) {
+    for (int j = 0; j < 8; j++) {
+        int idx_ij = i * w + j;
+        int idx_ji = j * w + i;
+        if (Rcoef_fpga[idx_ij] != Rcoef_cpu[idx_ji]) {
+            is_transpose = false;
+            break;
+        }
+    }
+    if (!is_transpose) break;
+}
+
+if (is_transpose) {
+    cout << "YES - FPGA output is TRANSPOSED!\n";
+    cout << "The storage in the kernel needs [x][y] not [y][x]\n";
+} else {
+    cout << "NO - Different issue\n";
+    cout << "Checking other patterns...\n";
+    
+    // Check if it matches without transpose
+    bool matches = true;
+    int diff_count = 0;
+    for (int i = 0; i < 8; i++) {
+        for (int j = 0; j < 8; j++) {
+            int idx = i * w + j;
+            if (Rcoef_fpga[idx] != Rcoef_cpu[idx]) {
+                matches = false;
+                diff_count++;
+            }
+        }
+    }
+    
+    if (matches) {
+        cout << "PERFECT MATCH - No issues!\n";
+    } else {
+        cout << "Differences found: " << diff_count << "/64 coefficients\n";
+        cout << "Showing difference map (FPGA - CPU):\n";
+        for (int i = 0; i < 8; i++) {
+            for (int j = 0; j < 8; j++) {
+                int idx = i * w + j;
+                int diff = Rcoef_fpga[idx] - Rcoef_cpu[idx];
+                if (diff != 0) {
+                    cout << std::setw(6) << diff << " ";
+                } else {
+                    cout << "     . ";
+                }
+            }
+            cout << "\n";
+        }
+    }
+}
+
+cout << "\n=== END VERIFICATION ===\n\n";
     // ------------------ JPEG-style pipeline per block ------------------
     vector<pixel_t> R_recon(w*h), G_recon(w*h), B_recon(w*h);
 
@@ -204,10 +289,6 @@ int main(int argc, char** argv)
 
     for (int by = 0; by < h; by += 8) {
         for (int bx = 0; bx < w; bx += 8) {
-
-            // Build 8x8 block of coeffs from FPGA (e.g., R channel)
-            // We'll do the JPEG pipeline for R,G,B same way
-            // Also do RLE comparison between CPU and FPGA path for each block.
 
             // -------- R channel block --------
             coeff_t blkR_fpga[8][8], blkR_cpu[8][8];
@@ -228,18 +309,18 @@ int main(int argc, char** argv)
             }
 
             // Quant + zigzag + RLE on FPGA coeffs
-            coeff_t q_fpga[8][8];
-            quant_block(blkR_fpga, q_fpga);
+            coeff_t q_fpga_blk[8][8];
+            quant_block(blkR_fpga, q_fpga_blk);
             vector<coeff_t> zz_fpga;
-            zigzag_block(q_fpga, zz_fpga);
+            zigzag_block(q_fpga_blk, zz_fpga);
             vector<std::pair<coeff_t,int>> rle_fpga;
             rle_encode(zz_fpga, rle_fpga);
 
             // Same on CPU coeffs
-            coeff_t q_cpu[8][8];
-            quant_block(blkR_cpu, q_cpu);
+            coeff_t q_cpu_blk[8][8];
+            quant_block(blkR_cpu, q_cpu_blk);
             vector<coeff_t> zz_cpu;
-            zigzag_block(q_cpu, zz_cpu);
+            zigzag_block(q_cpu_blk, zz_cpu);
             vector<std::pair<coeff_t,int>> rle_cpu;
             rle_encode(zz_cpu, rle_cpu);
 
