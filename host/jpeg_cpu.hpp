@@ -5,7 +5,7 @@
 #include <algorithm>
 
 using pixel_t = uint8_t;
-using coeff_t = int16_t;
+using coeff_t = int16_t;  // CRITICAL: Must match FPGA (ap_int<16>)
 
 static const int N = 8;
 
@@ -21,7 +21,7 @@ static const double C_d[N][N] = {
     {0.097545,-0.277785, 0.415735,-0.490393, 0.490393,-0.415735, 0.277785,-0.097545}
 };
 
-// Standard JPEG luminance quant matrix (example)
+// Standard JPEG luminance quant matrix
 static const int Q_luma[64] = {
      16, 11, 10, 16, 24, 40, 51, 61,
      12, 12, 14, 19, 26, 58, 60, 55,
@@ -45,11 +45,12 @@ static const int zigzag[64] = {
     35, 36, 48, 49, 57, 58, 62, 63
 };
 
+// CORRECTED DCT (matches FPGA after fixing transpose issue)
 inline void dct_block_cpu(const pixel_t in[8][8], coeff_t out[8][8]) {
     double tmp[8][8];
 
-    // Pass 1: Row transform
-    // tmp[y][u] = Σ_x C[u][x] * (in[y][x] - 128)
+    // Row transform: For each row y, compute all frequencies u
+    // tmp[y][u] = sum_x C[u][x] * (in[y][x] - 128)
     for (int y = 0; y < N; y++) {
         for (int u = 0; u < N; u++) {
             double acc = 0.0;
@@ -60,8 +61,8 @@ inline void dct_block_cpu(const pixel_t in[8][8], coeff_t out[8][8]) {
         }
     }
 
-    // Pass 2: Column transform
-    // out[u][v] = Σ_y C[v][y] * tmp[y][u]
+    // Column transform: For each frequency pair (u,v)
+    // out[u][v] = sum_y C[v][y] * tmp[y][u]
     for (int u = 0; u < N; u++) {
         for (int v = 0; v < N; v++) {
             double acc = 0.0;
@@ -76,14 +77,12 @@ inline void dct_block_cpu(const pixel_t in[8][8], coeff_t out[8][8]) {
     }
 }
 
-// ============================================
-// INVERSE DCT (CPU)
-// ============================================
+// CORRECTED IDCT (inverse DCT)
 inline void idct_block_cpu(const coeff_t in[8][8], pixel_t out[8][8]) {
     double tmp[8][8];
 
-    // Pass 1: Inverse column transform
-    // tmp[y][u] = Σ_v C[v][y] * in[u][v]
+    // Inverse column transform: For each row y
+    // tmp[y][u] = sum_v C[v][y] * in[u][v]
     for (int y = 0; y < N; y++) {
         for (int u = 0; u < N; u++) {
             double acc = 0.0;
@@ -94,8 +93,8 @@ inline void idct_block_cpu(const coeff_t in[8][8], pixel_t out[8][8]) {
         }
     }
 
-    // Pass 2: Inverse row transform
-    // out[y][x] = Σ_u C[u][x] * tmp[y][u] + 128
+    // Inverse row transform
+    // out[y][x] = sum_u C[u][x] * tmp[y][u] + 128
     for (int y = 0; y < N; y++) {
         for (int x = 0; x < N; x++) {
             double acc = 0.0;
@@ -109,7 +108,8 @@ inline void idct_block_cpu(const coeff_t in[8][8], pixel_t out[8][8]) {
         }
     }
 }
-// Quantize 8x8 block using Q_luma (you can adapt for chroma if needed)
+
+// Quantize 8x8 block using Q_luma
 inline void quant_block(const coeff_t in[8][8], coeff_t out[8][8]) {
     for (int y = 0; y < 8; y++) {
         for (int x = 0; x < 8; x++) {
@@ -158,8 +158,7 @@ inline void inv_zigzag_block(const std::vector<coeff_t> &in, coeff_t blk[8][8]) 
     }
 }
 
-// Simple RLE: (value, run_length) for zero-runs on AC coefficients.
-// Here we just RLE the full 64 entries for demo.
+// Simple RLE encoding
 inline void rle_encode(const std::vector<coeff_t> &in,
                        std::vector<std::pair<coeff_t,int>> &out)
 {
@@ -188,7 +187,7 @@ inline void rle_decode(const std::vector<std::pair<coeff_t,int>> &in,
     }
 }
 
-// PSNR
+// PSNR calculation
 inline double compute_psnr_channel(const std::vector<pixel_t> &orig,
                                    const std::vector<pixel_t> &recon)
 {
