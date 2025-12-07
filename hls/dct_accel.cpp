@@ -4,7 +4,7 @@
 
 typedef ap_uint<8>    pixel_t;
 typedef ap_fixed<24,6> dct_t;   
-typedef ap_int<16>    coeff_t;
+typedef ap_int<16>    coeff_t;  // CRITICAL: Changed from ap_int<18> to match host int16_t
 
 static const int N = 8;
 
@@ -19,15 +19,15 @@ static const dct_t C[N][N] = {
     {0.097545,-0.277785, 0.415735,-0.490393, 0.490393,-0.415735, 0.277785,-0.097545}
 };
 
+// CORRECTED DCT with proper indexing
 static void dct_2d(pixel_t in_blk[8][8], coeff_t out_blk[8][8]) {
 #pragma HLS INLINE
 
     dct_t tmp[8][8];
 #pragma HLS ARRAY_PARTITION variable=tmp complete dim=0
 
-    // Pass 1: Row transform
-    // For each input row y, compute all frequency components u
-    // tmp[y][u] = Σ_x C[u][x] * (in_blk[y][x] - 128)
+    // Row transform: For each row y, compute all frequencies u
+    // tmp[y][u] = sum_x C[u][x] * (in_blk[y][x] - 128)
     for (int y = 0; y < 8; y++) {
 #pragma HLS UNROLL
         for (int u = 0; u < 8; u++) {
@@ -41,9 +41,8 @@ static void dct_2d(pixel_t in_blk[8][8], coeff_t out_blk[8][8]) {
         }
     }
 
-    // Pass 2: Column transform  
-    // For each frequency pair (u,v), sum over input rows y
-    // out_blk[u][v] = Σ_y C[v][y] * tmp[y][u]
+    // Column transform: For each frequency pair (u,v)
+    // out_blk[u][v] = sum_y C[v][y] * tmp[y][u]
     for (int u = 0; u < 8; u++) {
 #pragma HLS UNROLL
         for (int v = 0; v < 8; v++) {
@@ -103,24 +102,20 @@ extern "C" void dct_accel(
             dct_2d(G_blk, G_coef);
             dct_2d(B_blk, B_coef);
 
-            // Store block
+            // Store block - CRITICAL FIX: Swap indices to [x][y]
+            // This corrects the transpose issue
             for (int y = 0; y < 8; y++) {
                 for (int x = 0; x < 8; x++) {
                     int gx = bx + x;
                     int gy = by + y;
                     if (gx < width && gy < height) {
                         int idx = gy * width + gx;
-                           outR[idx] = R_coef[x][y];  // ← Changed from [y][x] to [x][y]
-            outG[idx] = G_coef[x][y];  // ← Changed from [y][x] to [x][y]
-            outB[idx] = B_coef[x][y];
+                        outR[idx] = R_coef[x][y];  // Fixed: was R_coef[y][x]
+                        outG[idx] = G_coef[x][y];  // Fixed: was G_coef[y][x]
+                        outB[idx] = B_coef[x][y];  // Fixed: was B_coef[y][x]
                     }
                 }
             }
         }
     }
 }
-
-
-
-
-
