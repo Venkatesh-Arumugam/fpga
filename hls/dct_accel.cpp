@@ -4,7 +4,7 @@
 
 typedef ap_uint<8>    pixel_t;
 typedef ap_fixed<24,6> dct_t;   
-typedef ap_int<18>    coeff_t;
+typedef ap_int<16>    coeff_t;
 
 static const int N = 8;
 
@@ -110,15 +110,16 @@ extern "C" void dct_accel(
                     int gy = by + y;
                     if (gx < width && gy < height) {
                         int idx = gy * width + gx;
-                        outR[idx] = R_coef[y][x];
-                        outG[idx] = G_coef[y][x];
-                        outB[idx] = B_coef[y][x];
+                           outR[idx] = R_coef[x][y];  // ← Changed from [y][x] to [x][y]
+            outG[idx] = G_coef[x][y];  // ← Changed from [y][x] to [x][y]
+            outB[idx] = B_coef[x][y];
                     }
                 }
             }
         }
     }
 }
+
 
 
 
