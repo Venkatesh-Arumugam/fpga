@@ -1,12 +1,16 @@
 ############################################
-#  Vitis FPGA Build System (Updated)
+#  Vitis FPGA Build System (Multi-Variant)
 ############################################
 
 # Platform
 PLATFORM = xilinx_u280_gen3x16_xdma_1_202211_1
 
-# NEW kernel name
+# Kernel name (same for all variants)
 KERNEL_NAME = dct_accel
+
+# Choose variant: v1, v2, v3, v4, v5
+# Example: make VERSION=v3 all
+VERSION ?= v1
 
 # Targets: sw_emu / hw_emu / hw
 TARGET ?= hw_emu
@@ -14,9 +18,9 @@ TARGET ?= hw_emu
 ############################################
 # Source files
 ############################################
-HLS_SRC      = hls/$(KERNEL_NAME).cpp
-XO_FILE      = build/$(KERNEL_NAME)_$(TARGET).xo
-XCLBIN_FILE  = build/$(KERNEL_NAME)_$(TARGET).xclbin
+HLS_SRC      = hls/$(VERSION)_$(KERNEL_NAME).cpp
+XO_FILE      = build/$(VERSION)_$(KERNEL_NAME)_$(TARGET).xo
+XCLBIN_FILE  = build/$(VERSION)_$(KERNEL_NAME)_$(TARGET).xclbin
 
 HOST_SRC     = host/host.cpp
 HOST_EXE     = build/host.exe
@@ -27,7 +31,6 @@ HOST_EXE     = build/host.exe
 XRT_INC = $(XILINX_XRT)/include
 XRT_LIB = $(XILINX_XRT)/lib
 
-# Include extra headers such as jpeg_cpu.hpp
 HOST_INC = -I$(XRT_INC) -Ihost
 
 ############################################
@@ -65,7 +68,7 @@ host: build_dir
 	    -lxrt_coreutil -lpthread
 
 ############################################
-# Build everything (kernel + host)
+# Build everything
 ############################################
 all: xo xclbin host
 
@@ -73,13 +76,13 @@ all: xo xclbin host
 # Convenience targets
 ############################################
 sw_emu:
-	make TARGET=sw_emu all
+	make TARGET=sw_emu VERSION=$(VERSION) all
 
 hw_emu:
-	make TARGET=hw_emu all
+	make TARGET=hw_emu VERSION=$(VERSION) all
 
 hw:
-	make TARGET=hw all
+	make TARGET=hw VERSION=$(VERSION) all
 
 ############################################
 # Clean
