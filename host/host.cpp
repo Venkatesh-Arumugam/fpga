@@ -199,8 +199,7 @@ void print_performance_report(const PerfMetrics& perf, int width, int height)
     cout << "  Data readback:  " << perf.readback_time_ms << " ms\n";
     cout << "  Total FPGA:     " << perf.total_fpga_time_ms << " ms\n\n";
 
-    cout << "CPU Reference:\n";
-    cout << "  CPU DCT:        " << perf.cpu_dct_time_ms << " ms\n\n";
+
 
     cout << "Throughput:\n";
     cout << "  FPGA:           " << std::setprecision(2)
@@ -208,8 +207,7 @@ void print_performance_report(const PerfMetrics& perf, int width, int height)
     cout << "  FPGA:           " << std::setprecision(0)
          << perf.throughput_blocks_per_sec << " blocks/s\n\n";
 
-    cout << "Speedup:          " << std::setprecision(2)
-         << perf.speedup << "x vs CPU\n";
+   
     cout << "========================================\n";
 }
 
@@ -495,3 +493,4 @@ int main(int argc, char** argv)
 
     return 0;
 }
+
