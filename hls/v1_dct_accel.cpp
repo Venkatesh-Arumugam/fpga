@@ -1,14 +1,19 @@
+/******************************************************************************
+ * VERSION 1: MEMORY-OPTIMIZED WITH LOCAL BUFFERING (FIXED)
+ * File: v1_dct_accel_fixed.cpp
+ * Description: Add local buffers to improve memory access patterns
+ * Expected: 2-3x speedup, efficient memory bandwidth usage
+ ******************************************************************************/
+
 #include <ap_int.h>
 #include <ap_fixed.h>
 #include <hls_math.h>
 
-typedef ap_uint<8>    pixel_t;
-typedef ap_fixed<24,6> dct_t;   
-typedef ap_int<18>    coeff_t;
+typedef ap_uint<8>  pixel_t;
+typedef ap_int<16>  coeff_t;
+typedef ap_fixed<24,12> dct_t;
 
-static const int N = 8;
-
-static const dct_t C[N][N] = {
+static const dct_t C[8][8] = {
     {0.353553, 0.353553, 0.353553, 0.353553, 0.353553, 0.353553, 0.353553, 0.353553},
     {0.490393, 0.415735, 0.277785, 0.097545,-0.097545,-0.277785,-0.415735,-0.490393},
     {0.461940, 0.191342,-0.191342,-0.461940,-0.461940,-0.191342, 0.191342, 0.461940},
@@ -19,16 +24,12 @@ static const dct_t C[N][N] = {
     {0.097545,-0.277785, 0.415735,-0.490393, 0.490393,-0.415735, 0.277785,-0.097545}
 };
 
-static void dct_2d(pixel_t in_blk[8][8], coeff_t out_blk[8][8]) {
-#pragma HLS INLINE
-
+static void dct_2d(pixel_t in[8][8], coeff_t out[8][8])
+{
+#pragma HLS INLINE off
     dct_t tmp[8][8];
 #pragma HLS ARRAY_PARTITION variable=tmp complete dim=0
 
-    // --------------------------
-    // Correct Row Transform
-    // F(u,v) = sum_x C[u][x] * (in[v][x] - 128)
-    // --------------------------
     for (int u = 0; u < 8; u++) {
 #pragma HLS UNROLL
         for (int v = 0; v < 8; v++) {
@@ -36,16 +37,12 @@ static void dct_2d(pixel_t in_blk[8][8], coeff_t out_blk[8][8]) {
             dct_t acc = 0;
             for (int x = 0; x < 8; x++) {
 #pragma HLS UNROLL
-                acc += C[u][x] * (dct_t)((int)in_blk[v][x] - 128);
+                acc += C[u][x] * (dct_t)((int)in[x][v] - 128);
             }
             tmp[u][v] = acc;
         }
     }
 
-    // --------------------------
-    // Correct Column Transform
-    // F(u,v) = sum_y tmp[u][y] * C[v][y]
-    // --------------------------
     for (int u = 0; u < 8; u++) {
 #pragma HLS UNROLL
         for (int v = 0; v < 8; v++) {
@@ -56,7 +53,9 @@ static void dct_2d(pixel_t in_blk[8][8], coeff_t out_blk[8][8]) {
                 acc += tmp[u][y] * C[v][y];
             }
             int val = (int)hls::round(acc);
-            out_blk[u][v] = (coeff_t)val;
+            if (val < -32768) val = -32768;
+            if (val >  32767) val =  32767;
+            out[u][v] = (coeff_t)val;
         }
     }
 }
@@ -71,51 +70,101 @@ extern "C" void dct_accel(
     int width,
     int height
 ) {
-    pixel_t R_blk[8][8], G_blk[8][8], B_blk[8][8];
-#pragma HLS ARRAY_PARTITION variable=R_blk complete dim=0
-#pragma HLS ARRAY_PARTITION variable=G_blk complete dim=0
-#pragma HLS ARRAY_PARTITION variable=B_blk complete dim=0
+#pragma HLS INTERFACE m_axi port=inR offset=slave bundle=gmem0 max_read_burst_length=256
+#pragma HLS INTERFACE m_axi port=inG offset=slave bundle=gmem1 max_read_burst_length=256
+#pragma HLS INTERFACE m_axi port=inB offset=slave bundle=gmem2 max_read_burst_length=256
+#pragma HLS INTERFACE m_axi port=outR offset=slave bundle=gmem3 max_write_burst_length=256
+#pragma HLS INTERFACE m_axi port=outG offset=slave bundle=gmem4 max_write_burst_length=256
+#pragma HLS INTERFACE m_axi port=outB offset=slave bundle=gmem5 max_write_burst_length=256
+#pragma HLS INTERFACE s_axilite port=width
+#pragma HLS INTERFACE s_axilite port=height
+#pragma HLS INTERFACE s_axilite port=return
 
-    coeff_t R_coef[8][8], G_coef[8][8], B_coef[8][8];
-#pragma HLS ARRAY_PARTITION variable=R_coef complete dim=0
-#pragma HLS ARRAY_PARTITION variable=G_coef complete dim=0
-#pragma HLS ARRAY_PARTITION variable=B_coef complete dim=0
+    // Local buffers for burst reads/writes
+    pixel_t local_buf_R[64];
+    pixel_t local_buf_G[64];
+    pixel_t local_buf_B[64];
+    coeff_t local_coef_R[64];
+    coeff_t local_coef_G[64];
+    coeff_t local_coef_B[64];
+
+#pragma HLS ARRAY_PARTITION variable=local_buf_R cyclic factor=8
+#pragma HLS ARRAY_PARTITION variable=local_buf_G cyclic factor=8
+#pragma HLS ARRAY_PARTITION variable=local_buf_B cyclic factor=8
+#pragma HLS ARRAY_PARTITION variable=local_coef_R cyclic factor=8
+#pragma HLS ARRAY_PARTITION variable=local_coef_G cyclic factor=8
+#pragma HLS ARRAY_PARTITION variable=local_coef_B cyclic factor=8
 
     for (int by = 0; by < height; by += 8) {
         for (int bx = 0; bx < width; bx += 8) {
 
-            // Load block
-            for (int y = 0; y < 8; y++) {
-                for (int x = 0; x < 8; x++) {
-                    int gx = bx + x;
-                    int gy = by + y;
-                    if (gx < width && gy < height) {
-                        R_blk[y][x] = inR[gy * width + gx];
-                        G_blk[y][x] = inG[gy * width + gx];
-                        B_blk[y][x] = inB[gy * width + gx];
-                    } else {
-                        R_blk[y][x] = 0;
-                        G_blk[y][x] = 0;
-                        B_blk[y][x] = 0;
-                    }
+            // Burst read into local buffer
+            read_loop: for (int i = 0; i < 64; i++) {
+#pragma HLS PIPELINE II=1
+                int y = i / 8;
+                int x = i % 8;
+                int gx = bx + x;
+                int gy = by + y;
+                if (gx < width && gy < height) {
+                    int idx = gy * width + gx;
+                    local_buf_R[i] = inR[idx];
+                    local_buf_G[i] = inG[idx];
+                    local_buf_B[i] = inB[idx];
+                } else {
+                    local_buf_R[i] = (pixel_t)0;
+                    local_buf_G[i] = (pixel_t)0;
+                    local_buf_B[i] = (pixel_t)0;
                 }
             }
 
-            dct_2d(R_blk, R_coef);
-            dct_2d(G_blk, G_coef);
-            dct_2d(B_blk, B_coef);
+            // Reshape to 8x8 and compute DCT
+            pixel_t blk_R[8][8], blk_G[8][8], blk_B[8][8];
+            coeff_t coef_R[8][8], coef_G[8][8], coef_B[8][8];
 
-            // Store block
-            for (int y = 0; y < 8; y++) {
+#pragma HLS ARRAY_PARTITION variable=blk_R complete dim=0
+#pragma HLS ARRAY_PARTITION variable=blk_G complete dim=0
+#pragma HLS ARRAY_PARTITION variable=blk_B complete dim=0
+#pragma HLS ARRAY_PARTITION variable=coef_R complete dim=0
+#pragma HLS ARRAY_PARTITION variable=coef_G complete dim=0
+#pragma HLS ARRAY_PARTITION variable=coef_B complete dim=0
+
+            // Reshape from 1D buffer to 2D block
+            reshape_to_2d: for (int y = 0; y < 8; y++) {
                 for (int x = 0; x < 8; x++) {
-                    int gx = bx + x;
-                    int gy = by + y;
-                    if (gx < width && gy < height) {
-                        int idx = gy * width + gx;
-                        outR[idx] = R_coef[y][x];
-                        outG[idx] = G_coef[y][x];
-                        outB[idx] = B_coef[y][x];
-                    }
+                    int idx = y * 8 + x;
+                    blk_R[y][x] = local_buf_R[idx];
+                    blk_G[y][x] = local_buf_G[idx];
+                    blk_B[y][x] = local_buf_B[idx];
+                }
+            }
+
+            // Compute DCT for all channels
+            dct_2d(blk_R, coef_R);
+            dct_2d(blk_G, coef_G);
+            dct_2d(blk_B, coef_B);
+
+            // Flatten back to 1D for burst write
+            reshape_to_1d: for (int y = 0; y < 8; y++) {
+                for (int x = 0; x < 8; x++) {
+                    int idx = y * 8 + x;
+                    local_coef_R[idx] = coef_R[y][x];
+                    local_coef_G[idx] = coef_G[y][x];
+                    local_coef_B[idx] = coef_B[y][x];
+                }
+            }
+
+            // Burst write from local buffer
+            write_loop: for (int i = 0; i < 64; i++) {
+#pragma HLS PIPELINE II=1
+                int y = i / 8;
+                int x = i % 8;
+                int gx = bx + x;
+                int gy = by + y;
+                if (gx < width && gy < height) {
+                    int idx = gy * width + gx;
+                    outR[idx] = local_coef_R[i];
+                    outG[idx] = local_coef_G[i];
+                    outB[idx] = local_coef_B[i];
                 }
             }
         }
