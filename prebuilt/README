@@ -1,1 +1,2 @@
-This folder contains all prebuilt files for U280.
+Note: FPGA bitstreams (.xclbin) are not included in this repository due to GitHub file size limits.
+They can be generated locally using the provided build scripts
